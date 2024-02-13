@@ -23,6 +23,7 @@ input_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 global_client: mqtt.Client = None
 last_status = "ALIVE"
 last_location = None
+last_timestamp = 0
 last_update = time.time() - MAX_TIME_BETWEEN_UPDATES_MIN * 60
 
 print("Starting GPS rebouncer server...")
@@ -67,7 +68,7 @@ def handle_client_connection(conn):
             return
         decoded = data.decode("utf-8")
         print(f"Received: {decoded}")
-        # *HQ,xxxxxxxxxx,V1,xxxxxx,A,4220.8148,N,01409.2804,E,000.00,xxx,xxxxxx,xxxxxxxx,xxx,xx,xxxxx,xxxxxxxx#
+        # *HQ,xxxxxxxxxx,V1,221813,A,4220.8148,N,01409.2804,E,000.00,xxx,xxxxxx,xxxxxxxx,xxx,xx,xxxxx,xxxxxxxx#
         locationRaw: list[str] = decoded.split(",")[5:8]
         # to 60 degree and float 5 digits max
         lat = round(float(locationRaw[0][:2]) + float(locationRaw[0][2:]) / 60, 5)
@@ -76,6 +77,7 @@ def handle_client_connection(conn):
             "lat": lat,
             "lon": lon
         })
+        timestamp = decoded.split(",")[3]
 
     except Exception as e:
         print(f"Error during data receiving: {e}")
@@ -95,13 +97,15 @@ def handle_client_connection(conn):
 
     is_close_to_last = last_location is not None and abs(lat - last_location["lat"]) < MAX_DISTANCE and abs(lon - last_location["lon"]) < MAX_DISTANCE
     time_exceeded = time.time() - last_update > MAX_TIME_BETWEEN_UPDATES_MIN * 60 
-
+    has_old_timestamp = timestamp < last_timestamp
+    
     # mqttfy the message to my own broker
-    if not is_close_to_last or time_exceeded:
+    if not is_close_to_last or time_exceeded or not has_old_timestamp:
         try:
             global_client.publish(PUBLISH_TOPIC, location)
             last_location = json.loads(location)
             last_update = time.time()
+            last_timestamp = timestamp
         except Exception as e:
             print(f"Error during data publishing: {e}")
             err = True
