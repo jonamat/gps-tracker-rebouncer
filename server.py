@@ -132,6 +132,7 @@ while True:
     except Exception as e:
         print(f"Error during input socket binding: {e}")
         last_status = "ERROR"
-
+        
     finally:
+        conn.close()
         input_socket.close()
