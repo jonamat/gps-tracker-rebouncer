@@ -69,7 +69,8 @@ def handle_client_connection(conn):
             return
         decoded = data.decode("utf-8")
         print(f"Received: {decoded}")
-        # *HQ,xxxxxxxxxx,V1,221813,A,4220.8148,N,01409.2804,E,000.00,xxx,xxxxxx,xxxxxxxx,xxx,xx,xxxxx,xxxxxxxx#
+        # *HQ,xxxxxxxxxx,V1,HHMMSS,A,4220.8148,N,01409.2804,E,000.00,xxx,DDMMYY,xxxxxxxx,xxx,xx,xxxxx,xxxxxxxx#
+        # *HQ,xxxxxxxxxx,V1,221813,A,4220.8148,N,01600.8237,E,000.00,010,140224,FBFFFBFF,222,10,42092,19981601#
         locationRaw: list[str] = decoded.split(",")[5:8]
         # to 60 degree and float 5 digits max
         lat = round(float(locationRaw[0][:2]) + float(locationRaw[0][2:]) / 60, 5)
@@ -78,8 +79,10 @@ def handle_client_connection(conn):
             "lat": lat,
             "lon": lon
         })
-        timestamp = int(decoded.split(",")[3])
-
+        hhmmss = decoded.split(",")[3]
+        ddmmyy = decoded.split(",")[11]
+        timestamp = time.mktime(time.strptime(f"{ddmmyy} {hhmmss}", "%d%m%y %H%M%S"))
+        
     except Exception as e:
         print(f"Error during data receiving: {e}")
         last_status = "ERROR"
