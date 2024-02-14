@@ -60,6 +60,7 @@ def handle_client_connection(conn):
     global last_status
     global last_location
     global last_update
+    global last_timestamp
     
     # receive data from the GPS tracker
     try:
@@ -77,7 +78,7 @@ def handle_client_connection(conn):
             "lat": lat,
             "lon": lon
         })
-        timestamp = decoded.split(",")[3]
+        timestamp = int(decoded.split(",")[3])
 
     except Exception as e:
         print(f"Error during data receiving: {e}")
@@ -98,19 +99,25 @@ def handle_client_connection(conn):
     is_close_to_last = last_location is not None and abs(lat - last_location["lat"]) < MAX_DISTANCE and abs(lon - last_location["lon"]) < MAX_DISTANCE
     time_exceeded = time.time() - last_update > MAX_TIME_BETWEEN_UPDATES_MIN * 60 
     has_old_timestamp = timestamp < last_timestamp
+
+    if is_close_to_last and not time_exceeded:
+        print(f"Location is close to the last one, skip update")
+        return
+
+    if has_old_timestamp:
+        print(f"Timestamp is older than the last one, skip update")
+        return
+        
+    if is_close_to_last and time_exceeded:
+        print(f"Location is close to the last one, but time exceeded, updating")
+
+    if not is_close_to_last:
+        print(f"Location is changed, updating")
     
-    # mqttfy the message to my own broker
-    if not is_close_to_last or time_exceeded or not has_old_timestamp:
-        try:
-            global_client.publish(PUBLISH_TOPIC, location)
-            last_location = json.loads(location)
-            last_update = time.time()
-            last_timestamp = timestamp
-        except Exception as e:
-            print(f"Error during data publishing: {e}")
-            err = True
-    else:
-        print("Location is too close to the last one, not publishing")
+    last_location = json.loads(location)
+    last_update = time.time()
+    last_timestamp = timestamp
+    global_client.publish(PUBLISH_TOPIC, location)
 
     if err:
         last_status = "ERROR"
@@ -126,7 +133,12 @@ while True:
 
         while True:
             conn, addr = input_socket.accept()
-            handle_client_connection(conn)
+            try:
+                handle_client_connection(conn)
+            except Exception as e:
+                print(f"Error during handle_client_connection: {e}")
+                last_status = "ERROR"
+            time.sleep(1)
             conn.close()
 
     except Exception as e:
