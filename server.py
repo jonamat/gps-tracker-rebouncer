@@ -69,20 +69,27 @@ def handle_client_connection(conn):
             return
         decoded = data.decode("utf-8")
         print(f"Received: {decoded}")
+        
         # *HQ,xxxxxxxxxx,V1,HHMMSS,A,4220.8148,N,01409.2804,E,000.00,xxx,DDMMYY,xxxxxxxx,xxx,xx,xxxxx,xxxxxxxx#
         # *HQ,xxxxxxxxxx,V1,221813,A,4220.8148,N,01600.8237,E,000.00,010,140224,FBFFFBFF,222,10,42092,19981601#
-        locationRaw: list[str] = decoded.split(",")[5:8]
-        # to 60 degree and float 5 digits max
-        lat = round(float(locationRaw[0][:2]) + float(locationRaw[0][2:]) / 60, 5)
-        lon = round(float(locationRaw[2][:3]) + float(locationRaw[2][3:]) / 60, 5)
-        location = json.dumps({
-            "lat": lat,
-            "lon": lon
-        })
-        hhmmss = decoded.split(",")[3]
-        ddmmyy = decoded.split(",")[11]
-        timestamp = time.mktime(time.strptime(f"{ddmmyy} {hhmmss}", "%d%m%y %H%M%S"))
-        
+        locations: list[str] = decoded.split("#")
+
+        for location in locations:
+            if len(location) == 0:
+                continue
+
+            locationRaw: list[str] = location.split(",")[5:8]
+            # to 60 degree and float 5 digits max
+            lat = round(float(locationRaw[0][:2]) + float(locationRaw[0][2:]) / 60, 5)
+            lon = round(float(locationRaw[2][:3]) + float(locationRaw[2][3:]) / 60, 5)
+            location = json.dumps({
+                "lat": lat,
+                "lon": lon
+            })
+            hhmmss = location.split(",")[3]
+            ddmmyy = location.split(",")[11]
+            timestamp = time.mktime(time.strptime(f"{ddmmyy} {hhmmss}", "%d%m%y %H%M%S"))
+            
     except Exception as e:
         print(f"Error during data receiving: {e}")
         last_status = "ERROR"
@@ -117,10 +124,15 @@ def handle_client_connection(conn):
     if not is_close_to_last:
         print(f"Location is changed, updating")
     
-    last_location = json.loads(location)
-    last_update = time.time()
-    last_timestamp = timestamp
-    global_client.publish(PUBLISH_TOPIC, location)
+    pub = global_client.publish(PUBLISH_TOPIC, location)
+    if pub.is_published():
+        last_location = json.loads(location)
+        last_update = time.time()
+        last_timestamp = timestamp
+    else:
+        print(f"Error during publishing to MQTT: {pub.rc}")
+        err = True
+        return
 
     if err:
         last_status = "ERROR"
