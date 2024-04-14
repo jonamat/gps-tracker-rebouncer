@@ -78,16 +78,16 @@ def handle_client_connection(conn):
             if len(location) == 0:
                 continue
 
-            locationRaw: list[str] = location.split(",")[5:8]
+            location_raw: list[str] = location.split(",")[5:8]
             # to 60 degree and float 5 digits max
-            lat = round(float(locationRaw[0][:2]) + float(locationRaw[0][2:]) / 60, 5)
-            lon = round(float(locationRaw[2][:3]) + float(locationRaw[2][3:]) / 60, 5)
-            location = json.dumps({
+            lat = round(float(location_raw[0][:2]) + float(location_raw[0][2:]) / 60, 5)
+            lon = round(float(location_raw[2][:3]) + float(location_raw[2][3:]) / 60, 5)
+            location_data = json.dumps({
                 "lat": lat,
                 "lon": lon
             })
-            hhmmss = location.split(",")[3]
-            ddmmyy = location.split(",")[11]
+            hhmmss = location_data.split(",")[3]
+            ddmmyy = location_data.split(",")[11]
             timestamp = time.mktime(time.strptime(f"{ddmmyy} {hhmmss}", "%d%m%y %H%M%S"))
             
     except Exception as e:
