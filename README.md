@@ -60,3 +60,14 @@ The server listens for GPS data from a Sinotrak GPS tracker device, mine is a ST
 - `MAX_TIME_BETWEEN_UPDATES_MIN`: The maximum time threshold between consecutive GPS updates for publishing, in minutes. Defaults to `60` minutes.
 - `BROKER`: The address of the MQTT broker to connect to.
 
+
+## Sinotrack GPS Tracker configuration
+
+To configure the server IP address, send an SMS to the device with the command `804<password> <my_server_ip> <port>`. Default is `804000 45.112.204.242 8090` <br/>
+
+To set the time interval for the device to send GPS data, send an SMS to the device with the command `805<paasword> <seconds>`. The time interval is in seconds. For example, to set the time interval to 20 seconds, send the command `8050000 20`. 20 is default.
+
+## License
+
+MIT
+
