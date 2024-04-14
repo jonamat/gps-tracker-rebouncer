@@ -4,6 +4,7 @@ import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
 import time
 import os
+import traceback
 import json
 
 load_dotenv()
@@ -94,7 +95,7 @@ def handle_client_connection(conn):
             locations_json.append(location_data)
             
     except Exception as e:
-        print(f"Error during data receiving: {e}")
+        print(f"Error during data receiving: {traceback.print_exception(type(e), e, e.__traceback__)}")
         last_status = "ERROR"
         return
 
@@ -106,7 +107,7 @@ def handle_client_connection(conn):
             output_socket.connect((HOST_REB, HOST_REB_PORT))
             output_socket.sendall(data)
     except Exception as e:
-        print(f"Error during data sending: {e}")
+        print(f"Error during data sending: {traceback.print_exception(type(e), e, e.__traceback__)}")
         err = True
 
     is_close_to_last = last_location is not None and abs(lat - last_location["lat"]) < MAX_DISTANCE and abs(lon - last_location["lon"]) < MAX_DISTANCE
@@ -155,13 +156,13 @@ while True:
             try:
                 handle_client_connection(conn)
             except Exception as e:
-                print(f"Error during handle_client_connection: {e}")
+                print(f"Error during handle_client_connection: {traceback.print_exception(type(e), e, e.__traceback__)}")
                 last_status = "ERROR"
             time.sleep(1)
             conn.close()
 
     except Exception as e:
-        print(f"Error during input socket binding: {e}")
+        print(f"Error during input socket binding: {traceback.print_exception(type(e), e, e.__traceback__)}")
         last_status = "ERROR"
         
     finally:
