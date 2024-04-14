@@ -73,6 +73,7 @@ def handle_client_connection(conn):
         # *HQ,xxxxxxxxxx,V1,HHMMSS,A,4220.8148,N,01409.2804,E,000.00,xxx,DDMMYY,xxxxxxxx,xxx,xx,xxxxx,xxxxxxxx#
         # *HQ,xxxxxxxxxx,V1,221813,A,4220.8148,N,01600.8237,E,000.00,010,140224,FBFFFBFF,222,10,42092,19981601#
         locations: list[str] = decoded.split("#")
+        locations_json = []
 
         for location in locations:
             if len(location) == 0:
@@ -89,6 +90,8 @@ def handle_client_connection(conn):
             hhmmss = location_data.split(",")[3]
             ddmmyy = location_data.split(",")[11]
             timestamp = time.mktime(time.strptime(f"{ddmmyy} {hhmmss}", "%d%m%y %H%M%S"))
+
+            locations_json.append(location_data)
             
     except Exception as e:
         print(f"Error during data receiving: {e}")
@@ -124,15 +127,16 @@ def handle_client_connection(conn):
     if not is_close_to_last:
         print(f"Location is changed, updating")
     
-    pub = global_client.publish(PUBLISH_TOPIC, location)
-    if pub.is_published():
-        last_location = json.loads(location)
-        last_update = time.time()
-        last_timestamp = timestamp
-    else:
-        print(f"Error during publishing to MQTT: {pub.rc}")
-        err = True
-        return
+    for location in locations_json:
+        pub = global_client.publish(PUBLISH_TOPIC, location)
+        if pub.is_published():
+            last_location = json.loads(location)
+            last_update = time.time()
+            last_timestamp = timestamp
+        else:
+            print(f"Error during publishing to MQTT: {pub.rc}")
+            err = True
+            return
 
     if err:
         last_status = "ERROR"
