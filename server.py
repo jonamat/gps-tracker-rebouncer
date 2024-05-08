@@ -57,6 +57,14 @@ heartbeat_thread = threading.Thread(target=heartbeat_loop_fn)
 heartbeat_thread.start()
 
 
+def restart_timer():
+    time.sleep(24 * 60 * 60)
+    os._exit(0)
+
+restart_timer_thread = threading.Thread(target=restart_timer)
+restart_timer_thread.start()
+
+
 def handle_client_connection(conn):
     global last_status
     global last_location
