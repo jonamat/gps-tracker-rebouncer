@@ -30,13 +30,18 @@ last_update = time.time() - MAX_TIME_BETWEEN_UPDATES_MIN * 60
 print("Starting GPS rebouncer server...")
 
 
-def mqtt_thread_fn():
-    global global_client
-    client = mqtt.Client()
-    client.connect(os.getenv("BROKER"), 1883, 60)
-    global_client = client
-    client.loop_forever()
-
+def mqtt_thread_fn():    
+    try:
+        global global_client
+        client = mqtt.Client()
+        client.connect(os.getenv("BROKER"), 1883, 60)
+        global_client = client
+        client.loop_forever()
+    except Exception as e:
+        print(f"Error during MQTT client connection: {e}")
+        traceback.print_exception(type(e), e, e.__traceback__)
+        os._exit(0)
+        
 
 mqtt_thread = threading.Thread(target=mqtt_thread_fn)
 mqtt_thread.start()
