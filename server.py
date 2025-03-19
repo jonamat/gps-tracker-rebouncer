@@ -1,82 +1,51 @@
 import socket
-import threading
-import paho.mqtt.client as mqtt
-from dotenv import load_dotenv
 import time
 import os
 import traceback
-import json
+import requests
+import threading
+from dotenv import load_dotenv
+from retrying import retry
 
 load_dotenv()
 
+# Configuration
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", 2447))
 HOST_REB = os.getenv("HOST_REB", "45.112.204.242")
 HOST_REB_PORT = int(os.getenv("HOST_REB_PORT", 8090))
-PUBLISH_TOPIC = os.getenv("PUBLISH_TOPIC", "dev/gps")
-HEARTBEAT_TOPIC = os.getenv("HEARTBEAT_TOPIC", "sat/gps")
-MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", 0.001)) # ~ 100m
-MAX_TIME_BETWEEN_UPDATES_MIN = float(os.getenv("MAX_TIME_BETWEEN_UPDATES_MIN", 60))
+MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", 0.001))  # ~100m
+MAX_TIME_BETWEEN_UPDATES_MIN = float(os.getenv("MAX_TIME_BETWEEN_UPDATES_MIN", 120))
+VM_URL = os.getenv("VM_URL", "http://192.168.4.3:8428")
 
-input_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-input_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-global_client: mqtt.Client = None
-last_status = "ALIVE"
 last_location = None
-last_timestamp = 0
 last_update = time.time() - MAX_TIME_BETWEEN_UPDATES_MIN * 60
 
-print("Starting GPS rebouncer server...")
 
 
-def mqtt_thread_fn():    
-    try:
-        global global_client
-        client = mqtt.Client()
-        client.connect(os.getenv("BROKER"), 1883, 60)
-        global_client = client
-        client.loop_forever()
-    except Exception as e:
-        print(f"Error during MQTT client connection: {e}")
-        traceback.print_exception(type(e), e, e.__traceback__)
-        os._exit(0)
-        
-
-mqtt_thread = threading.Thread(target=mqtt_thread_fn)
-mqtt_thread.start()
-
-while global_client is None:
-    pass
-
-print("MQTT client connected")
-
-
-def heartbeat_loop_fn():
+def start_server():
+    """Start the GPS rebouncer server."""
     while True:
-        global_client.publish(HEARTBEAT_TOPIC, last_status)
-        time.sleep(1)
+        try:
+            server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_socket.bind((HOST, PORT))
+            server_socket.listen(5)
+            print(f"Listening on {HOST}:{PORT}...")
 
+            while True:
+                conn, addr = server_socket.accept()
+                threading.Thread(target=handle_client_connection, args=(conn,)).start()
+        
+        except Exception as e:
+            print(f"Server error: {e}")
+            traceback.print_exc()
+            time.sleep(5)
 
-heartbeat_thread = threading.Thread(target=heartbeat_loop_fn)
-heartbeat_thread.start()
-
-
-def restart_timer():
-    time.sleep(24 * 60 * 60)
-    os._exit(0)
-
-restart_timer_thread = threading.Thread(target=restart_timer)
-restart_timer_thread.start()
 
 
 def handle_client_connection(conn):
-    global last_status
-    global last_location
-    global last_update
-    global last_timestamp
-    
-    # receive data from the GPS tracker
+    """Handle an incoming client connection."""
     try:
         data = conn.recv(1024)
         if not data:
@@ -84,104 +53,93 @@ def handle_client_connection(conn):
         decoded = data.decode("utf-8")
         print(f"Received: {decoded}")
         
-        # *HQ,xxxxxxxxxx,V1,HHMMSS,A,4220.8148,N,01409.2804,E,000.00,xxx,DDMMYY,xxxxxxxx,xxx,xx,xxxxx,xxxxxxxx#
-        # *HQ,xxxxxxxxxx,V1,221813,A,4220.8148,N,01600.8237,E,000.00,010,140224,FBFFFBFF,222,10,42092,19981601#
-        locations: list[str] = decoded.split("#")
-        locations_json = []
-
-        for location in locations:
-            if len(location) == 0:
-                continue
-
-            location_raw: list[str] = location.split(",")[5:8]
-            # to 60 degree and float 5 digits max
-            lat = round(float(location_raw[0][:2]) + float(location_raw[0][2:]) / 60, 5)
-            lon = round(float(location_raw[2][:3]) + float(location_raw[2][3:]) / 60, 5)
-            location_data = json.dumps({
-                "lat": lat,
-                "lon": lon
-            })
-            hhmmss = location.split(",")[3]
-            ddmmyy = location.split(",")[11]
-            timestamp = time.mktime(time.strptime(f"{ddmmyy} {hhmmss}", "%d%m%y %H%M%S"))
-
-            locations_json.append(location_data)
-            
-    except Exception as e:
-        print(f"Error during data receiving: {e}")
-        traceback.print_exception(type(e), e, e.__traceback__)
-        last_status = "ERROR"
-        return
-
-    err = False
-    # send data to sinotrack
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as output_socket:
-            output_socket.settimeout(5)
-            output_socket.connect((HOST_REB, HOST_REB_PORT))
-            output_socket.sendall(data)
-    except Exception as e:
-        print(f"Error during data sending: {e}")
-        traceback.print_exception(type(e), e, e.__traceback__)
-        err = True
-
-    is_close_to_last = last_location is not None and abs(lat - last_location["lat"]) < MAX_DISTANCE and abs(lon - last_location["lon"]) < MAX_DISTANCE
-    time_exceeded = time.time() - last_update > MAX_TIME_BETWEEN_UPDATES_MIN * 60 
-    has_old_timestamp = timestamp < last_timestamp
-
-    if is_close_to_last and not time_exceeded:
-        print(f"Location is close to the last one, skip update")
-        return
-
-    if has_old_timestamp:
-        print(f"Timestamp is older than the last one, skip update")
-        return
-        
-    if is_close_to_last and time_exceeded:
-        print(f"Location is close to the last one, but time exceeded, updating")
-
-    if not is_close_to_last:
-        print(f"Location is changed, updating")
+        locations = parse_gps_data(decoded)
+        forward_to_sinotrack(data)
+        update_victoria_metrics(locations)
     
-    for location in locations_json:
-        pub = global_client.publish(PUBLISH_TOPIC, location)
-        if pub.is_published():
-            last_location = json.loads(location)
-            last_update = time.time()
-            last_timestamp = timestamp
-        else:
-            print(f"Error during publishing to MQTT: {pub.rc}")
-            err = True
-            return
-
-    if err:
-        last_status = "ERROR"
-    else:
-        last_status = "ALIVE"
-
-
-while True:
-    try:
-        input_socket.bind((HOST, PORT))
-        input_socket.listen(1)
-        print(f"Listening on {HOST}:{PORT}...")
-
-        while True:
-            conn, addr = input_socket.accept()
-            try:
-                handle_client_connection(conn)
-            except Exception as e:
-                print(f"Error during handle_client_connection: {e}")
-                traceback.print_exception(type(e), e, e.__traceback__)
-                last_status = "ERROR"
-            time.sleep(1)
-            conn.close()
-
     except Exception as e:
-        print(f"Error during input socket binding: {e}")
-        traceback.print_exception(type(e), e, e.__traceback__)
-        last_status = "ERROR"
-        
+        print(f"Error handling client connection: {e}")
+        traceback.print_exc()
+    
     finally:
         conn.close()
-        input_socket.close()
+
+
+
+def parse_gps_data(decoded):
+    """Parse incoming GPS data into structured format."""
+    # *HQ,xxxxxxxxxx,V1,HHMMSS,A,4220.8148,N,01409.2804,E,000.00,xxx,DDMMYY,xxxxxxxx,xxx,xx,xxxxx,xxxxxxxx#
+    # *HQ,xxxxxxxxxx,V1,221813,A,4220.8148,N,01600.8237,E,000.00,010,140224,FBFFFBFF,222,10,42092,19981601#
+
+    records = decoded.split("#")
+    locations = []
+
+    for record in records:
+        if not record:
+            continue
+
+        try:
+            fields = record.split(",")
+            lat_raw, lon_raw = fields[5], fields[7]
+            hhmmss, ddmmyy = fields[3], fields[11]
+            timestamp = time.mktime(time.strptime(f"{ddmmyy} {hhmmss}", "%d%m%y %H%M%S"))
+            lat = round(float(lat_raw[:2]) + float(lat_raw[2:]) / 60, 5)
+            lon = round(float(lon_raw[:3]) + float(lon_raw[3:]) / 60, 5)
+
+            locations.append({"lat": lat, "lon": lon, "timestamp": timestamp})
+        except Exception as e:
+            print(f"Error parsing GPS data: {e}")
+            traceback.print_exc()
+
+    return locations
+
+
+
+@retry(wait_fixed=5000, stop_max_attempt_number=3)
+def forward_to_sinotrack(data):
+    """Forward raw data to the Sinotrack service."""
+    try:
+        with socket.create_connection((HOST_REB, HOST_REB_PORT), timeout=5) as s:
+            s.sendall(data)
+    except Exception as e:
+        print(f"Error forwarding to Sinotrack: {e}")
+        traceback.print_exc()
+        raise
+
+
+
+def update_victoria_metrics(locations):
+    """Send location updates to Victoria Metrics if needed."""
+    global last_location, last_update
+
+    for record in locations:
+        lat, lon, timestamp = record["lat"], record["lon"], record["timestamp"]
+        
+        if last_location and abs(lat - last_location["lat"]) < MAX_DISTANCE and abs(lon - last_location["lon"]) < MAX_DISTANCE:
+            if time.time() - last_update < MAX_TIME_BETWEEN_UPDATES_MIN * 60:
+                print("Location unchanged, skipping update")
+                continue
+            else:
+                print("Time exceeded, updating location")
+        else:
+            print("Location changed, updating")
+
+        try:
+            payload = {
+                "metric": {"__name__": "location/latlon"},
+                "values": [f"{lat},{lon}"],
+                "timestamps": [timestamp]
+            }
+            response = requests.post(f"{VM_URL}/api/v1/import", json=payload)
+            response.raise_for_status()
+            last_location = record
+            last_update = time.time()
+        except Exception as e:
+            print(f"Error updating Victoria Metrics: {e}")
+            traceback.print_exc()
+
+
+
+if __name__ == "__main__":
+    print("Starting GPS rebouncer server...")
+    start_server()
