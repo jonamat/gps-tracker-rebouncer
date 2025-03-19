@@ -22,6 +22,21 @@ VM_URL = os.getenv("VM_URL", "http://192.168.4.3:8428")
 last_location = None
 last_update = time.time() - MAX_TIME_BETWEEN_UPDATES_MIN * 60
 
+# Constants for encoding/decoding lat/lon
+ENCODING_FACTOR = 10**7  # Scale to preserve 7 decimal places
+MULTIPLIER = 360 * ENCODING_FACTOR  # Helps keep numbers unique
+
+def encode_latlon(lat, lon):
+    """Encodes latitude and longitude into a single integer using math operations."""
+    lat_enc = int((lat + 90) * ENCODING_FACTOR)  # Shift to positive
+    lon_enc = int((lon + 180) * ENCODING_FACTOR)  # Shift to positive
+    return lat_enc * MULTIPLIER + lon_enc  # Combine using multiplication
+
+def decode_latlon(encoded):
+    """Decodes a single integer back into latitude and longitude using math operations."""
+    lat = (encoded // MULTIPLIER) / ENCODING_FACTOR - 90
+    lon = (encoded % MULTIPLIER) / ENCODING_FACTOR - 180
+    return lat, lon
 
 
 def start_server():
@@ -126,14 +141,16 @@ def update_victoria_metrics(locations):
             print("Location changed, updating")
 
         try:
+            encoded_latlon = encode_latlon(lat, lon)
+
             payload = {
                 "metric": {"__name__": "location/latlon"},
-                "values": [f"{lat},{lon}"],
+                "values": [encoded_latlon],
                 "timestamps": [timestamp]
             }
             
-            # debug: print jsonline 
-            print(f"Sending to Victoria Metrics: {json.dumps(payload)}")
+            # todo remove
+            print(f"[DEBUG] Sending to Victoria Metrics: {json.dumps(payload)}")
 
             response = requests.post(f"{VM_URL}/api/v1/import", json=payload)
             response.raise_for_status()
