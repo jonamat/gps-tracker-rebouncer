@@ -30,13 +30,13 @@ MAX_LAT = 180  # Latitude range (-90 to 90)
 MAX_LON = 360  # Longitude range (-180 to 180)
 
 
-def encode_latlon_math(lat, lon):
+def encode_latlon(lat, lon):
     """Encodes latitude and longitude into a single float64-safe number."""
     lat_enc = int((lat + LAT_OFFSET) * ENCODING_FACTOR)  # Scale and shift to positive
     lon_enc = int((lon + LON_OFFSET) * ENCODING_FACTOR)  # Scale and shift to positive
     return lat_enc * MAX_LON + lon_enc  # Keep within float64 safe range
 
-def decode_latlon_math(encoded):
+def decode_latlon(encoded):
     """Decodes a float64-safe number back into latitude and longitude."""
     lat_enc = encoded // MAX_LON
     lon_enc = encoded % MAX_LON
