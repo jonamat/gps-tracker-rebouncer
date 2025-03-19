@@ -3,6 +3,7 @@ import time
 import os
 import traceback
 import requests
+import json
 import threading
 from dotenv import load_dotenv
 from retrying import retry
@@ -130,6 +131,10 @@ def update_victoria_metrics(locations):
                 "values": [f"{lat},{lon}"],
                 "timestamps": [timestamp]
             }
+            
+            # debug: print jsonline 
+            print(f"Sending to Victoria Metrics: {json.dumps(payload)}")
+
             response = requests.post(f"{VM_URL}/api/v1/import", json=payload)
             response.raise_for_status()
             last_location = record
