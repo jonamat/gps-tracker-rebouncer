@@ -22,24 +22,23 @@ VM_URL = os.getenv("VM_URL", "http://192.168.4.3:8428")
 last_location = None
 last_update = time.time() - MAX_TIME_BETWEEN_UPDATES_MIN * 60
 
-# Constants for encoding/decoding lat/lon
-ENCODING_FACTOR = 10**6  # Reduce to 6 decimal places
+ENCODING_FACTOR = 10**4  # Precision ~10 meters
 LAT_OFFSET = 90
 LON_OFFSET = 180
-MAX_LAT = 180  # Latitude range (-90 to 90)
-MAX_LON = 360  # Longitude range (-180 to 180)
+MULTIPLIER = 10**4 * 360 
 
 
 def encode_latlon(lat, lon):
-    """Encodes latitude and longitude into a single float64-safe number."""
-    lat_enc = int((lat + LAT_OFFSET) * ENCODING_FACTOR)  # Scale and shift to positive
-    lon_enc = int((lon + LON_OFFSET) * ENCODING_FACTOR)  # Scale and shift to positive
-    return lat_enc * MAX_LON + lon_enc  # Keep within float64 safe range
+    """Encodes latitude and longitude into a single float64-safe number (~10m precision)."""
+    lat_enc = int((lat + LAT_OFFSET) * ENCODING_FACTOR) 
+    lon_enc = int((lon + LON_OFFSET) * ENCODING_FACTOR) 
+    return lat_enc * MULTIPLIER + lon_enc 
 
 def decode_latlon(encoded):
     """Decodes a float64-safe number back into latitude and longitude."""
-    lat_enc = encoded // MAX_LON
-    lon_enc = encoded % MAX_LON
+    lat_enc = encoded // MULTIPLIER 
+    lon_enc = encoded % MULTIPLIER  
+
     lat = (lat_enc / ENCODING_FACTOR) - LAT_OFFSET
     lon = (lon_enc / ENCODING_FACTOR) - LON_OFFSET
     return lat, lon
