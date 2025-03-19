@@ -1,6 +1,6 @@
 # GPS Rebouncer
 
-The server listens for GPS data from a Sinotrak GPS tracker device, mine is a ST-901L 4G Mini GPS tracker, rebroadcasts it to a Sinotrack servers, and publishes the location data to an MQTT broker
+The server listens for GPS data from a Sinotrak GPS tracker device, tested on a ST-901L 4G Mini GPS tracker, send it to a Sinotrack servers, and log the location to a Victoria Metrics db 
 
 ## Usage
 
@@ -29,11 +29,10 @@ The server listens for GPS data from a Sinotrak GPS tracker device, mine is a ST
    PORT=2447
    HOST_REB=45.112.204.242
    HOST_REB_PORT=8089
-   PUBLISH_TOPIC=dev/gps
-   HEARTBEAT_TOPIC=sat/gps
    MAX_DISTANCE=0.001 # lat/long max distance, approximately 100 meters
    MAX_TIME_BETWEEN_UPDATES_MIN=60 # the max time between consecutive GPS updates for publishing if the distance threshold is not met
-   BROKER=your_mqtt_broker_address
+   VM_URL=http://localhost:8428 # Victoria Metrics URL
+
    ```
 
 5. Run the script:
