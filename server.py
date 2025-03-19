@@ -98,11 +98,12 @@ def parse_gps_data(decoded):
             fields = record.split(",")
             lat_raw, lon_raw = fields[5], fields[7]
             hhmmss, ddmmyy = fields[3], fields[11]
-            timestamp = time.mktime(time.strptime(f"{ddmmyy} {hhmmss}", "%d%m%y %H%M%S"))
+            timestamp_seconds = time.mktime(time.strptime(f"{ddmmyy} {hhmmss}", "%d%m%y %H%M%S"))
+            timestamp_seconds = int(timestamp_seconds)
             lat = round(float(lat_raw[:2]) + float(lat_raw[2:]) / 60, 5)
             lon = round(float(lon_raw[:3]) + float(lon_raw[3:]) / 60, 5)
 
-            locations.append({"lat": lat, "lon": lon, "timestamp": timestamp})
+            locations.append({"lat": lat, "lon": lon, "timestamp": timestamp_seconds})
         except Exception as e:
             print(f"Error parsing GPS data: {e}")
             traceback.print_exc()
@@ -129,7 +130,8 @@ def update_victoria_metrics(locations):
     global last_location, last_update
 
     for record in locations:
-        lat, lon, timestamp = record["lat"], record["lon"], record["timestamp"]
+        lat, lon, timestamp_sec = record["lat"], record["lon"], record["timestamp"]
+        timestamp_ms = timestamp_sec * 1000
         
         if last_location and abs(lat - last_location["lat"]) < MAX_DISTANCE and abs(lon - last_location["lon"]) < MAX_DISTANCE:
             if time.time() - last_update < MAX_TIME_BETWEEN_UPDATES_MIN * 60:
@@ -146,7 +148,7 @@ def update_victoria_metrics(locations):
             payload = {
                 "metric": {"__name__": "location/latlon"},
                 "values": [encoded_latlon],
-                "timestamps": [timestamp]
+                "timestamps": [timestamp_ms]
             }
             
             # todo remove
