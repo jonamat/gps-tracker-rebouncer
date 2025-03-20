@@ -64,7 +64,6 @@ def start_server():
             time.sleep(5)
 
 
-
 def handle_client_connection(conn):
     """Handle an incoming client connection."""
     try:
@@ -129,6 +128,7 @@ def forward_to_sinotrack(data):
         raise
 
 
+failed_vm_updates_queue = []
 
 def update_victoria_metrics(locations):
     """Send location updates to Victoria Metrics if needed."""
@@ -147,6 +147,8 @@ def update_victoria_metrics(locations):
         else:
             print("Location changed, updating")
 
+        last_update = time.time()
+        
         try:
             encoded_latlon = encode_latlon(lat, lon)
 
@@ -155,20 +157,33 @@ def update_victoria_metrics(locations):
                 "values": [encoded_latlon],
                 "timestamps": [timestamp_ms]
             }
-            
-            # todo remove
-            print(f"[DEBUG] Sending to Victoria Metrics: {json.dumps(payload)}")
 
             response = requests.post(f"{VM_URL}/api/v1/import", json=payload)
             response.raise_for_status()
             last_location = record
-            last_update = time.time()
         except Exception as e:
             print(f"Error updating Victoria Metrics: {e}")
             traceback.print_exc()
+            failed_vm_updates_queue.append(payload)
 
+
+def handle_failed_vm_updates():
+    """Retry failed Victoria Metrics updates."""
+    while True:
+        if failed_vm_updates_queue:
+            print(f"Retrying {len(failed_vm_updates_queue)} failed updates...")
+            payload = failed_vm_updates_queue.pop(0)
+            try:
+                response = requests.post(f"{VM_URL}/api/v1/import", json=payload)
+                response.raise_for_status()
+            except Exception as e:
+                print(f"Error retrying Victoria Metrics update: {e}")
+                traceback.print_exc()
+                failed_vm_updates_queue.append(payload)
+        time.sleep(10)
 
 
 if __name__ == "__main__":
     print("Starting GPS rebouncer server...")
+    threading.Thread(target=handle_failed_vm_updates, daemon=True).start()
     start_server()
