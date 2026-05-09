@@ -9,6 +9,7 @@ from collections import deque
 
 import paho.mqtt.client as mqtt
 from dotenv import load_dotenv
+import requests
 
 load_dotenv()
 
@@ -27,6 +28,7 @@ MAX_TIME_BETWEEN_UPDATES_MIN = float(os.getenv("MAX_TIME_BETWEEN_UPDATES_MIN", 6
 #   *HQ,<imei>,V4,V1,<yyyyMMddHHmmss UTC>#
 # Set SEND_ACK=false only for debugging (disabling causes retransmission storms).
 SEND_ACK = os.getenv("SEND_ACK", "true").lower() == "true"
+VM_URL = os.getenv("VM_URL", "http://192.168.4.3:8428")
 
 # Per-IMEI state, keyed by IMEI string
 device_states: dict[str, dict] = {}
@@ -42,8 +44,22 @@ global_client: mqtt.Client = None
 
 def mqtt_thread_fn():
     global global_client
+    broker = os.getenv("BROKER")
+    print(f"[MQTT] Connecting to broker: {broker!r}")
     client = mqtt.Client()
-    client.connect(os.getenv("BROKER"), 1883, 60)
+
+    def on_connect(_c, _userdata, _flags, rc):
+        if rc == 0:
+            print(f"[MQTT] Connected (rc=0)")
+        else:
+            print(f"[MQTT] Connection failed (rc={rc})")
+
+    def on_disconnect(_c, _userdata, rc):
+        print(f"[MQTT] Disconnected (rc={rc})")
+
+    client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
+    client.connect(broker, 1883, 60)
     global_client = client
     client.loop_forever()
 
@@ -53,7 +69,7 @@ threading.Thread(target=mqtt_thread_fn, daemon=True).start()
 while global_client is None:
     time.sleep(0.05)
 
-print("MQTT client connected")
+print("[MQTT] Client object ready")
 
 
 def heartbeat_loop_fn():
@@ -167,6 +183,57 @@ def interpret_status(status_hex: str) -> dict:
     }
 
 
+# --- lat/lon encoding for Victoria Metrics ---
+# Encodes lat/lon into a single float64-safe integer (~10m precision).
+
+_ENCODING_FACTOR = 10 ** 4
+_LAT_OFFSET = 90
+_LON_OFFSET = 180
+_MULTIPLIER = 10 ** 4 * 360
+
+
+def encode_latlon(lat: float, lon: float) -> int:
+    lat_enc = int((lat + _LAT_OFFSET) * _ENCODING_FACTOR)
+    lon_enc = int((lon + _LON_OFFSET) * _ENCODING_FACTOR)
+    return lat_enc * _MULTIPLIER + lon_enc
+
+
+# Queue for VM writes that failed, retried by a background thread.
+_failed_vm_queue: list[dict] = []
+
+
+def write_location_to_vm(lat: float, lon: float, timestamp_ms: int, imei: str, status_hex: str | None) -> None:
+    payload = {
+        "metric": {"__name__": "location/latlon", "imei": imei, "status": status_hex or ""},
+        "values": [encode_latlon(lat, lon)],
+        "timestamps": [timestamp_ms],
+    }
+    print(f"[VM] POST {VM_URL}/api/v1/import payload={payload}")
+    try:
+        r = requests.post(f"{VM_URL}/api/v1/import", json=payload, timeout=5)
+        r.raise_for_status()
+        print(f"[VM] Write OK (status={r.status_code})")
+    except Exception as e:
+        print(f"[VM] Write failed: {e} — queuing for retry")
+        _failed_vm_queue.append(payload)
+
+
+def _vm_retry_loop() -> None:
+    while True:
+        time.sleep(10)
+        if not _failed_vm_queue:
+            continue
+        print(f"[VM] Retrying {len(_failed_vm_queue)} failed write(s)...")
+        payload = _failed_vm_queue.pop(0)
+        try:
+            r = requests.post(f"{VM_URL}/api/v1/import", json=payload, timeout=5)
+            r.raise_for_status()
+            print(f"[VM] Retry OK")
+        except Exception as e:
+            print(f"[VM] Retry failed: {e} — re-queuing")
+            _failed_vm_queue.append(payload)
+
+
 # Known empirical state transitions (from → to) → human label.
 # Used to enrich event payloads; does not gate behaviour.
 _TRANSITIONS: dict[tuple[str | None, str], str] = {
@@ -277,6 +344,15 @@ def handle_client_connection(conn: socket.socket):
             # Same coordinates + different status = important event (movement, battery, etc.)
             if status_hex and status_hex != prev_status:
                 transition = _TRANSITIONS.get((prev_status, status_hex))
+                interpreted = interpret_status(status_hex)
+                if transition is None:
+                    print(
+                        f"[{imei}] UNKNOWN STATUS TRANSITION: {prev_status} → {status_hex}"
+                        f" | interpreted={interpreted}"
+                        f" | raw_packet={raw_pkt!r}"
+                    )
+                else:
+                    print(f"[{imei}] Status: {prev_status} → {status_hex} ({transition}) {interpreted}")
                 event_payload = {
                     "imei": imei,
                     "type": pkt["type"],
@@ -287,60 +363,52 @@ def handle_client_connection(conn: socket.socket):
                     "lat": pkt["lat"],
                     "lon": pkt["lon"],
                     "tracker_ts": pkt["tracker_ts"],
-                    "interpreted": interpret_status(status_hex),
+                    "interpreted": interpreted,
                 }
                 global_client.publish(EVENT_TOPIC, json.dumps(event_payload))
-                print(
-                    f"[{imei}] Status: {prev_status} → {status_hex}"
-                    f" ({transition}) {event_payload['interpreted']}"
-                )
                 state["last_status_hex"] = status_hex
 
             # V6 type or A/V flag = V means no GPS fix (boot, LBS-only, reconnect).
             # Log it but do not publish a location — coordinates are unreliable.
             if pkt["gps_valid"] != "A" or pkt["lat"] is None:
-                print(f"[{imei}] No GPS fix ({pkt['type']}), skipping location update")
+                print(f"[{imei}] No GPS fix (type={pkt['type']} valid={pkt['gps_valid']}), skipping location update")
                 continue
 
             lat, lon = pkt["lat"], pkt["lon"]
             tracker_ts = pkt["tracker_ts"]
 
+            print(f"[{imei}] GPS fix: lat={lat} lon={lon} ts={pkt['date_str']} {pkt['time_str']} tracker_ts={tracker_ts}")
+
             # Discard out-of-order timestamps (stale packet from before last known fix)
             if tracker_ts and state["last_tracker_ts"] and tracker_ts < state["last_tracker_ts"]:
-                print(f"[{imei}] Stale timestamp ({pkt['date_str']} {pkt['time_str']}), skipping")
+                print(f"[{imei}] Stale timestamp: got {tracker_ts} but last was {state['last_tracker_ts']}, skipping")
                 continue
 
             last_loc = state["last_location"]
-            is_near = (
-                last_loc is not None
-                and abs(lat - last_loc["lat"]) < MAX_DISTANCE
-                and abs(lon - last_loc["lon"]) < MAX_DISTANCE
-            )
-            time_exceeded = time.time() - state["last_update"] > MAX_TIME_BETWEEN_UPDATES_MIN * 60
+            if last_loc is not None:
+                dlat = abs(lat - last_loc["lat"])
+                dlon = abs(lon - last_loc["lon"])
+                is_near = dlat < MAX_DISTANCE and dlon < MAX_DISTANCE
+                print(f"[{imei}] Distance check: dlat={dlat:.6f} dlon={dlon:.6f} threshold={MAX_DISTANCE} is_near={is_near}")
+            else:
+                is_near = False
+                print(f"[{imei}] No previous location, will publish")
+
+            elapsed = time.time() - state["last_update"]
+            time_exceeded = elapsed > MAX_TIME_BETWEEN_UPDATES_MIN * 60
+            print(f"[{imei}] Time since last update: {elapsed:.0f}s (limit={MAX_TIME_BETWEEN_UPDATES_MIN * 60:.0f}s) time_exceeded={time_exceeded}")
 
             if is_near and not time_exceeded:
-                print(f"[{imei}] Location unchanged, skipping update")
+                print(f"[{imei}] Location unchanged and time not exceeded, skipping update")
                 continue
 
-            location_payload = json.dumps({
-                "imei": imei,
-                "lat": lat,
-                "lon": lon,
-                "speed": pkt["speed"],
-                "course": pkt["course"],
-                "status_hex": status_hex,
-                "tracker_ts": tracker_ts,
-            })
-            pub = global_client.publish(PUBLISH_TOPIC, location_payload)
-            if pub.is_published():
-                state["last_location"] = {"lat": lat, "lon": lon}
-                state["last_update"] = time.time()
-                state["last_tracker_ts"] = tracker_ts
-                global_status = "ALIVE"
-                print(f"[{imei}] Location published: {lat},{lon} status={status_hex}")
-            else:
-                print(f"[{imei}] MQTT publish failed (rc={pub.rc})")
-                global_status = "ERROR"
+            timestamp_ms = int(tracker_ts * 1000) if tracker_ts else int(time.time() * 1000)
+            write_location_to_vm(lat, lon, timestamp_ms, imei, status_hex)
+            state["last_location"] = {"lat": lat, "lon": lon}
+            state["last_update"] = time.time()
+            state["last_tracker_ts"] = tracker_ts
+            global_status = "ALIVE"
+            print(f"[{imei}] Location written: {lat},{lon} status={status_hex} ts={timestamp_ms}")
 
     finally:
         time.sleep(1)  # keep connection alive briefly for ACK delivery
@@ -369,4 +437,5 @@ def start_server():
 
 
 if __name__ == "__main__":
+    threading.Thread(target=_vm_retry_loop, daemon=True).start()
     start_server()
