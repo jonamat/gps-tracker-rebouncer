@@ -204,7 +204,7 @@ _failed_vm_queue: list[dict] = []
 
 def write_location_to_vm(lat: float, lon: float, timestamp_ms: int, imei: str, status_hex: str | None) -> None:
     payload = {
-        "metric": {"__name__": "location/latlon", "imei": imei, "status": status_hex or ""},
+        "metric": {"__name__": "location/latlon"},
         "values": [encode_latlon(lat, lon)],
         "timestamps": [timestamp_ms],
     }
@@ -236,6 +236,10 @@ def _vm_retry_loop() -> None:
 
 # Known empirical state transitions (from → to) → human label.
 # Used to enrich event payloads; does not gate behaviour.
+# Observed in production logs (2026-05-10):
+#   FBFFFBFF → FFFFFBFF  after movement stops
+#   FFFFFBFF → FBF7FBFF  device enters idle/sleep (seen on stale 090925 packet)
+#   FBF7FBFF → FBFFFBFF  wakeup from idle/sleep
 _TRANSITIONS: dict[tuple[str | None, str], str] = {
     ("FFFFFBFF", "FBFFFBFF"): "movement_wakeup",
     ("FBFFFBFF", "FFFFFBFF"): "stopped",
@@ -243,8 +247,12 @@ _TRANSITIONS: dict[tuple[str | None, str], str] = {
     ("FBFFFBFF", "FBF7FBBF"): "low_battery_alarm",
     ("FBF7FBBF", "FFFFFBFF"): "normal_restored",
     ("FBF7FBFF", "FFFFFBFF"): "normal_restored",
+    ("FFFFFBFF", "FBF7FBFF"): "idle_sleep",
+    ("FBFFFBFF", "FBF7FBFF"): "idle_sleep",
+    ("FBF7FBFF", "FBFFFBFF"): "wakeup_moving",
     (None, "FFFFFBFF"):       "boot_normal",
     (None, "FBFFFBFF"):       "boot_moving",
+    (None, "FBF7FBFF"):       "boot_idle",
 }
 
 
